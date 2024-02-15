@@ -1,0 +1,12 @@
+.canvasContainer {
+  text-align: center;
+  position: relative;
+  /* margin-top: 10px; */
+}
+
+.canvasContainer>canvas {
+  width: 100%;
+  height: 99vh;
+  /* aspect-ratio: 1; */
+  /* max-width: 600px; */
+}
