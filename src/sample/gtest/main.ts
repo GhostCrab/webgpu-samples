@@ -5,9 +5,8 @@ import instancedCircleVertWGSL from './instancedCircle.vert.wgsl';
 
 import { ArcballCamera, WASDCamera, cameraSourceInfo } from './camera';
 import { createInputHandler, inputSourceInfo } from './input';
-import { random } from 'wgpu-matrix/dist/2.x/vec2-impl';
 
-const init: SampleInit = async ({ canvas, pageState, gui }) => {
+const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   // The input handler
   const inputHandler = createInputHandler(window, canvas);
 
@@ -74,6 +73,7 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
   new Float32Array(verticesBuffer.getMappedRange()).set(quadVertexArray);
   verticesBuffer.unmap();
 
+  const sampleCount = 4;
   const pipeline = device.createRenderPipeline({
     layout: 'auto',
     vertex: {
@@ -109,6 +109,18 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
       targets: [
         {
           format: presentationFormat,
+          blend: {
+            color: {
+              srcFactor: 'src-alpha',
+              dstFactor: 'one',
+              operation: 'add',
+            },
+            alpha: {
+              srcFactor: 'zero',
+              dstFactor: 'one',
+              operation: 'add',
+            },
+          }
         },
       ],
     },
@@ -116,31 +128,31 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
       topology: 'triangle-list',
     },
     depthStencil: {
-      depthWriteEnabled: true,
+      depthWriteEnabled: false,
       depthCompare: 'less',
       format: 'depth24plus',
     },
+    multisample: {
+      count: sampleCount,
+    },
+    
   });
 
-  // const paramBindGroup: GPUBindGroup = device.createBindGroup({
-  //   layout: pipeline.getBindGroupLayout(0),
-  //   entries: [
-  //     {
-  //       binding: 0,
-  //       resource: {
-  //         buffer: simParamBuffer,
-  //       },
-  //     }
-  //   ],
-  // });
+  const texture = device.createTexture({
+    size: [canvas.width, canvas.height],
+    sampleCount,
+    format: presentationFormat,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT,
+  });
 
   const depthTexture = device.createTexture({
     size: [canvas.width, canvas.height],
+    sampleCount,
     format: 'depth24plus',
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
 
-  const numObjects = 200;
+  const numObjects = 20000;
   const posOffsets = new Array<Vec4>(numObjects);
   const posOffsetData = new Float32Array(4 * numObjects);
   const posOffsetsSize = Float32Array.BYTES_PER_ELEMENT * 4 * numObjects;
@@ -148,19 +160,18 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
 
   for (let i = 0; i < numObjects; i++) {
     posOffsets[i] = vec4.create(
-      (Math.random() * canvas.clientWidth) - (canvas.clientWidth / 2),
-      (Math.random() * canvas.clientHeight) - (canvas.clientHeight / 2),
+      (Math.random() * canvas.width) - (canvas.width / 2),
+      (Math.random() * canvas.height) - (canvas.height / 2),
       0, 0
     )
   }
-
 
   function updatePosOffsets() {
     for (let i = 0; i < numObjects; i++) {
       posOffsetData.set(posOffsets[i], i*4);
     }
     device.queue.writeBuffer(
-      uniformBuffer,
+      storageBuffer,
       posOffsetsOffset,
       posOffsetData
     );
@@ -178,16 +189,16 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
   const simParamsSize = 4 * Float32Array.BYTES_PER_ELEMENT;
   const simParamsOffset = (modelViewMatrixOffset + modelViewMatrixSize);
 
-  const uniformBufferSize = posOffsetsSize + modelViewMatrixSize + simParamsSize;
-  const uniformBuffer = device.createBuffer({
-    size: uniformBufferSize,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  const storageBufferSize = posOffsetsSize + modelViewMatrixSize + simParamsSize;
+  const storageBuffer = device.createBuffer({
+    size: storageBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
   function updateSimParams(totalTime: number) {
     simParams.totalTime = totalTime;
     device.queue.writeBuffer(
-      uniformBuffer,
+      storageBuffer,
       simParamsOffset,
       new Float32Array([
         simParams.totalTime,
@@ -204,29 +215,11 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
       {
         binding: 0,
         resource: {
-          buffer: uniformBuffer,
+          buffer: storageBuffer,
         },
       }
     ],
   });
-
-  const renderPassDescriptor: GPURenderPassDescriptor = {
-    colorAttachments: [
-      {
-        view: undefined,
-        clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-        loadOp: 'clear',
-        storeOp: 'store',
-      },
-    ],
-    depthStencilAttachment: {
-      view: depthTexture.createView(),
-
-      depthClearValue: 1.0,
-      depthLoadOp: 'clear',
-      depthStoreOp: 'store',
-    },
-  };
 
   const aspect = canvas.width / canvas.height;
   const projectionMatrix = mat4.perspective(
@@ -253,7 +246,7 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
 
   const modelViewProjection = getModelViewProjectionMatrix(0);
   device.queue.writeBuffer(
-    uniformBuffer,
+    storageBuffer,
     modelViewMatrixOffset,
     modelViewProjection.buffer,
     modelViewProjection.byteOffset,
@@ -264,6 +257,8 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
   let lastFrameMS = Date.now();
 
   function frame() {
+    stats.begin();
+
     const now = Date.now();
     const deltaTime = (now - lastFrameMS) / 1000;
     const totalTime = (now - startFrameMS) / 1000;
@@ -274,7 +269,24 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
     // Sample is no longer the active page.
     if (!pageState.active) return;
 
-    renderPassDescriptor.colorAttachments[0].view = context.getCurrentTexture().createView();
+    const renderPassDescriptor: GPURenderPassDescriptor = {
+      colorAttachments: [
+        {
+          view: texture.createView(),
+          resolveTarget: context.getCurrentTexture().createView(),
+          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+          loadOp: 'clear',
+          storeOp: 'store',
+        },
+      ],
+      depthStencilAttachment: {
+        view: depthTexture.createView(),
+  
+        depthClearValue: 1.0,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+      },
+    };
     
     const commandEncoder = device.createCommandEncoder();
     const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
@@ -284,6 +296,8 @@ const init: SampleInit = async ({ canvas, pageState, gui }) => {
     passEncoder.draw(quadVertexCount, numObjects, 0, 0);
     passEncoder.end();
     device.queue.submit([commandEncoder.finish()]);
+
+    stats.end()
 
     requestAnimationFrame(frame);
   }
@@ -296,6 +310,7 @@ const GTest: () => JSX.Element = () =>
     name: 'GTest',
     description: 'Graphics Rendering Test.',
     gui: true,
+    stats: true,
     init,
     sources: [
       {

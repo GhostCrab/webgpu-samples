@@ -1,5 +1,5 @@
 struct Uniforms {
-  posOffsets : array<vec4f, 200>,
+  posOffsets : array<vec4f, 20000>,
   modelViewProjectionMatrix : mat4x4<f32>,
   totalTime : f32,
   unused1: f32,
@@ -7,7 +7,7 @@ struct Uniforms {
   unused3: f32,
 }
 
-@group(0) @binding(0) var<uniform> uniforms : Uniforms;
+@group(0) @binding(0) var<storage, read> uniforms : Uniforms;
 
 struct VertexOutput {
   @builtin(position) Position : vec4f,
@@ -32,8 +32,8 @@ fn vertex_main(
   );
 
   var scaleMatrix = mat4x4<f32>(
-    4.5, 0, 0, 0,
-    0, 4.5, 0, 0,
+    3, 0, 0, 0,
+    0, 3, 0, 0,
     0, 0, 1, 0,
     0, 0, 0, 1
   );
@@ -51,14 +51,14 @@ fn inverse_lerp(a: f32, b: f32, v: f32) -> f32 {
 fn fragment_main(@location(0) fragUV: vec2f) -> @location(0) vec4f {
   var recenter = fragUV - 0.5;
   var len = sqrt((recenter.x * recenter.x) + (recenter.y * recenter.y));
-  if (len > 0.5) {
-    discard;
-  }
+  // if (len > 0.5) {
+  //   discard;
+  // }
 
-  // const c1 = vec3(1, 0, 0);
-  // const c2 = vec3(0, 0, 1);
-  // var realign = saturate(inverse_lerp(0.2, 1, len * 2));
-  // var out = mix(c1, c2, realign); 
+  const c1 = vec4(1, 1, 1, 1);
+  const c2 = vec4(1, .2, 0, 0);
+  var realign = saturate(inverse_lerp(0.4, 1, len * 2));
+  var out = mix(c1, c2, realign); 
 
-  return vec4(1.0);
+  return out;
 }
