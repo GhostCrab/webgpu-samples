@@ -28,7 +28,7 @@ main {
   position: relative;
   flex: 1;
   height: 100vh;
-  overflow: auto;
+  overflow: hidden;
   background: black;
   color: #ddd;
   /* padding-left: 15px;

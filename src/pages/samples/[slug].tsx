@@ -45,6 +45,7 @@ export const pages: PageComponentType = {
   cornell: dynamic(() => import('../../sample/cornell/main')),
   gameOfLife: dynamic(() => import('../../sample/gameOfLife/main')),
   gtest: dynamic(() => import('../../sample/gtest/main')),
+  gtest2: dynamic(() => import('../../sample/gtest2/main')),
   renderBundles: dynamic(() => import('../../sample/renderBundles/main')),
   worker: dynamic(() => import('../../sample/worker/main')),
   'A-buffer': dynamic(() => import('../../sample/a-buffer/main')),

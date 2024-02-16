@@ -1,16 +1,23 @@
+struct MVPUniform {
+  modelViewProjectionMatrix: mat4x4<f32>
+};
+
+struct Params {
+  totalTime: f32,
+  deltaTime: f32,
+  unused1: f32,
+  unused2: f32
+};
+
 //     0     1     2         3         4       5       6       7  8  9
 // f32 xpos, ypos, prevXPos, prevYPos, accelX, accelY, radius, r, g, b
-
 struct StorageBuf {
-  verletObjects : array<f32, 100000 * 10>,
-  modelViewProjectionMatrix : mat4x4<f32>,
-  totalTime : f32,
-  deltaTime: f32,
-  unused2: f32,
-  unused3: f32,
+  verletObjects : array<f32, 100000 * 10>
 }
 
-@group(0) @binding(0) var<storage, read> storageBuf : StorageBuf;
+@group(0) @binding(0) var<uniform> mvp : MVPUniform;
+@group(0) @binding(1) var<uniform> params : Params;
+@group(0) @binding(2) var<storage, read> storageBuf : StorageBuf;
 
 struct VertexOutput {
   @builtin(position) position : vec4<f32>,
@@ -33,8 +40,8 @@ fn vertex_main(
   var color = vec4f(storageBuf.verletObjects[(instanceIdx * 10) + 7], storageBuf.verletObjects[(instanceIdx * 10) + 8], storageBuf.verletObjects[(instanceIdx * 10) + 9], 1);
 
   var rotMatrix = mat4x4<f32>(
-    cos(storageBuf.totalTime), -sin(storageBuf.totalTime), 0, 0,
-    sin(storageBuf.totalTime), cos(storageBuf.totalTime), 0, 0,
+    cos(params.totalTime), -sin(params.totalTime), 0, 0,
+    sin(params.totalTime), cos(params.totalTime), 0, 0,
     0, 0, 1, 0,
     0, 0, 0, 1
   );
@@ -48,7 +55,7 @@ fn vertex_main(
 
   var offsetPos = (scaleMatrix * position) + posOffset;
 
-  return VertexOutput(storageBuf.modelViewProjectionMatrix * offsetPos, color, uv, 0);
+  return VertexOutput(mvp.modelViewProjectionMatrix * offsetPos, color, uv, 0);
 }
 
 fn inverse_lerp(a: f32, b: f32, v: f32) -> f32 {

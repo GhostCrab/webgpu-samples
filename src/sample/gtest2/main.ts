@@ -6,30 +6,8 @@ import updateVerletWGSL from './updateVerlet.wgsl';
 
 import { ArcballCamera, WASDCamera, cameraSourceInfo } from './camera';
 import { createInputHandler, inputSourceInfo } from './input';
-
-function lerp( a: number, b: number, alpha: number ) {
-  return a + alpha * ( b - a );
- }
-
-function HSVtoRGB(h: number, s: number, v: number) {
-  let r: number, g: number, b: number, i: number, f: number, p: number, q: number, t: number;
-
-  i = Math.floor(h * 6);
-  f = h * 6 - i;
-  p = v * (1 - s);
-  q = v * (1 - f * s);
-  t = v * (1 - (1 - f) * s);
-  switch (i % 6) {
-      case 0: r = v, g = t, b = p; break;
-      case 1: r = q, g = v, b = p; break;
-      case 2: r = p, g = v, b = t; break;
-      case 3: r = p, g = q, b = v; break;
-      case 4: r = t, g = p, b = v; break;
-      case 5: r = v, g = p, b = q; break;
-  }
-
-  return { r, g, b };
-}
+import { HSVtoRGB, lerp } from './utility';
+import { Quad } from './quad';
 
 const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   // The input handler
@@ -49,12 +27,13 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
 
   // Callback handler for camera mode
   let oldCameraType = params.type;
-  gui.add(params, 'type', ['arcball', 'WASD']).onChange(() => {
-    // Copy the camera matrix from old to new
-    const newCameraType = params.type;
-    cameras[newCameraType].matrix = cameras[oldCameraType].matrix;
-    oldCameraType = newCameraType;
-  });
+  gui.hide();
+  // gui.add(params, 'type', ['arcball', 'WASD']).onChange(() => {
+  //   // Copy the camera matrix from old to new
+  //   const newCameraType = params.type;
+  //   cameras[newCameraType].matrix = cameras[oldCameraType].matrix;
+  //   oldCameraType = newCameraType;
+  // });
   
   const adapter = await navigator.gpu.requestAdapter();
   const device = await adapter.requestDevice();
@@ -73,30 +52,8 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     alphaMode: 'premultiplied',
   });
 
-  const quadVertexSize = 4 * 6;
-  const quadPositionOffset = 0;
-  const quadUVOffset = 4 * 4;
-  const quadVertexCount = 6;
-
-  const quadVertexArray = new Float32Array([
-      // float4 position, float4 color, float2 uv,
-    -1,  1, 0,  1,   0, 0,
-    -1, -1, 0,  1,   0, 1,
-     1,  1, 0,  1,   1, 0,
-
-     1,  1, 0,  1,   1, 0,
-    -1, -1, 0,  1,   0, 1,
-     1, -1, 0,  1,   1, 1,
-  ]);
-
-  // Create a vertex buffer from the cube data.
-  const verticesBuffer = device.createBuffer({
-    size: quadVertexArray.byteLength,
-    usage: GPUBufferUsage.VERTEX,
-    mappedAtCreation: true,
-  });
-  new Float32Array(verticesBuffer.getMappedRange()).set(quadVertexArray);
-  verticesBuffer.unmap();
+  
+  const quad = new Quad(device);
 
   const computePipeline = device.createComputePipeline({
     layout: 'auto',
@@ -118,23 +75,19 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
         code: instancedCircleVertWGSL,
       }),
       entryPoint: 'vertex_main',
-      buffers: [
-        {
-          arrayStride: quadVertexSize,
-          attributes: [
-            {
-              // position
-              shaderLocation: 0,
-              offset: quadPositionOffset,
-              format: 'float32x4',
-            },
-            {
-              // uv
-              shaderLocation: 1,
-              offset: quadUVOffset,
-              format: 'float32x2',
-            },
-          ],
+      buffers: [{
+        arrayStride: quad.vertexSize,
+        attributes: [{
+            // position
+            shaderLocation: 0,
+            offset: quad.positionOffset,
+            format: 'float32x4',
+          }, {
+            // uv
+            shaderLocation: 1,
+            offset: quad.uvOffset,
+            format: 'float32x2',
+          },],
         },
       ],
     },
@@ -143,8 +96,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
         code: instancedCircleVertWGSL,
       }),
       entryPoint: 'fragment_main',
-      targets: [
-        {
+      targets: [{
           format: presentationFormat,
           blend: {
             color: {
@@ -218,6 +170,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   function addVerletObject(xpos: number, ypos: number) {
     const xposCentered = xpos - (canvas.width / 2);
     const yposCentered = ypos - (canvas.height / 2);
+    console.log(`${xpos} ${ypos} ${canvas.width} ${canvas.height} ${xposCentered} ${yposCentered}`)
     for (let i = 0; i < numVerletObjects * verletObjectNumFloats; ) {
       if (verletObjectsData[i+7] == 0 && verletObjectsData[i+8] == 0 && verletObjectsData[i+9] == 0) {
         verletObjectsData[i] = xposCentered;
@@ -264,8 +217,17 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     );
   }
 
-  const modelViewMatrixSize = Float32Array.BYTES_PER_ELEMENT * 16;
-  const modelViewMatrixOffset = verletObjectsOffset + verletObjectsSize;
+  const storageBufferSize = verletObjectsSize;
+  const storageBuffer = device.createBuffer({
+    size: storageBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+
+  const mvpMatBufferSize = Float32Array.BYTES_PER_ELEMENT * 16;
+  const mvpMatBuffer = device.createBuffer({
+    size: mvpMatBufferSize,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
 
   const simParams = {
     totalTime: 0,
@@ -273,21 +235,18 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     unused2: 0,
     unused3: 0,
   };
-  const simParamsSize = 4 * Float32Array.BYTES_PER_ELEMENT;
-  const simParamsOffset = (modelViewMatrixOffset + modelViewMatrixSize);
-
-  const storageBufferSize = verletObjectsSize + modelViewMatrixSize + simParamsSize;
-  const storageBuffer = device.createBuffer({
-    size: storageBufferSize,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  const paramsBufferSize = 4 * Float32Array.BYTES_PER_ELEMENT;
+  const paramsBuffer = device.createBuffer({
+    size: paramsBufferSize,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
   function updateSimParams(totalTime: number, deltaTime: number) {
     simParams.totalTime = totalTime;
     simParams.deltaTime = deltaTime;
     device.queue.writeBuffer(
-      storageBuffer,
-      simParamsOffset,
+      paramsBuffer,
+      0,
       new Float32Array([
         simParams.totalTime,
         simParams.deltaTime
@@ -304,6 +263,18 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       {
         binding: 0,
         resource: {
+          buffer: mvpMatBuffer,
+        },
+      },
+      {
+        binding: 1,
+        resource: {
+          buffer: paramsBuffer,
+        },
+      },
+      {
+        binding: 2,
+        resource: {
           buffer: storageBuffer,
         },
       }
@@ -315,6 +286,12 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     entries: [
       {
         binding: 0,
+        resource: {
+          buffer: paramsBuffer,
+        },
+      },
+      {
+        binding: 1,
         resource: {
           buffer: storageBuffer,
         },
@@ -347,8 +324,8 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
 
   const modelViewProjection = getModelViewProjectionMatrix(0);
   device.queue.writeBuffer(
-    storageBuffer,
-    modelViewMatrixOffset,
+    mvpMatBuffer,
+    0,
     modelViewProjection.buffer,
     modelViewProjection.byteOffset,
     modelViewProjection.byteLength
@@ -383,7 +360,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
         {
           view: texture.createView(),
           resolveTarget: context.getCurrentTexture().createView(),
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+          clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1.0 },
           loadOp: 'clear',
           storeOp: 'store',
         },
@@ -398,19 +375,19 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     };
     
     const commandEncoder = device.createCommandEncoder();
-    // {
-    //   const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-    //   passEncoder.setPipeline(computePipeline);
-    //   passEncoder.setBindGroup(0, computeBindGroup);
-    //   passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
-    //   passEncoder.end();
-    // }
+    {
+      const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+      passEncoder.setPipeline(computePipeline);
+      passEncoder.setBindGroup(0, computeBindGroup);
+      passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
+      passEncoder.end();
+    }
     {
       const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
       passEncoder.setPipeline(renderPipeline);
       passEncoder.setBindGroup(0, bufferBindGroup);
-      passEncoder.setVertexBuffer(0, verticesBuffer);
-      passEncoder.draw(quadVertexCount, numVerletObjects, 0, 0);
+      passEncoder.setVertexBuffer(0, quad.verticesBuffer);
+      passEncoder.draw(quad.vertexCount, numVerletObjects, 0, 0);
       passEncoder.end();
       device.queue.submit([commandEncoder.finish()]);
     }
@@ -430,14 +407,16 @@ const GTest: () => JSX.Element = () =>
     gui: true,
     stats: true,
     init,
-    sources: [
-      {
+    sources: [{
         name: __filename.substring(__dirname.length + 1),
         contents: __SOURCE__,
-      },
-      {
-        name: 'instancedCircle.vert.wgsl',
+      }, {
+        name: './instancedCircle.vert.wgsl',
         contents: instancedCircleVertWGSL,
+        editable: true,
+      }, {
+        name: './updateVerlet.wgsl',
+        contents: updateVerletWGSL,
         editable: true,
       },
     ],
