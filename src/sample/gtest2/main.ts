@@ -4,6 +4,9 @@ import { makeSample, SampleInit } from '../../components/SampleLayout';
 import boundaryCircleVertWGSL from './boundaryCircle.vert.wgsl';
 import instancedCircleVertWGSL from './instancedCircle.vert.wgsl';
 import updateVerletWGSL from './updateVerlet.wgsl';
+import binSumWGSL from './binSum.wgsl';
+import binPrefixSumWGSL from './binPrefixSum.wgsl';
+import binReindexWGSL from './binReindex.wgsl';
 
 import { ArcballCamera, WASDCamera, cameraSourceInfo } from './camera';
 import { createInputHandler, inputSourceInfo } from './input';
@@ -70,13 +73,33 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     },
   });
 
-  const computePipelineBin = device.createComputePipeline({
+  const computePipelineBinSum = device.createComputePipeline({
     layout: 'auto',
     compute: {
       module: device.createShaderModule({
-        code: updateVerletWGSL,
+        code: binSumWGSL,
       }),
-      entryPoint: 'bin',
+      entryPoint: 'main',
+    },
+  });
+
+  const computePipelineBinPrefixSum = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({
+        code: binPrefixSumWGSL,
+      }),
+      entryPoint: 'main',
+    },
+  });
+
+  const computePipelineBinReindex = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({
+        code: binReindexWGSL,
+      }),
+      entryPoint: 'main',
     },
   });
 
@@ -243,7 +266,8 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
 
-  const numVerletObjects = 1000;
+  const verletObjectRadius = 1;
+  const numVerletObjects = 650000;
   // 0, 1, 2, 3,    4, 5, 6, 7,        8, 9, 10, 11,    12, 13, 14, 15,
   // vec4<f32> pos, vec4<f32> prevPos, vec4<f32> accel, vec4<f32> rgbR
   const verletObjectNumFloats = 16;
@@ -259,13 +283,13 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     verletObjectsData[i+4] = xpos;
     verletObjectsData[i+5] = ypos;
 
-    const rgb = HSVtoRGB(0, lerp(0.2, 0.7, Math.random()), 1);
+    const rgb = HSVtoRGB(0, lerp(0.6, 0.9, Math.random()), 1);
 
     verletObjectsData[i+12] = rgb.r;
     verletObjectsData[i+13] = rgb.g;
     verletObjectsData[i+14] = rgb.b;
 
-    verletObjectsData[i+15] = 3;
+    verletObjectsData[i+15] = verletObjectRadius;
     i += verletObjectNumFloats;
   }
   
@@ -307,21 +331,17 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     }
   }
 
-  const voBufferSize = verletObjectsSize;
-  const voBuffers: GPUBuffer[] = new Array(2);
-  
-  for (let i = 0; i < 2; ++i) {
-    voBuffers[i] = device.createBuffer({
-      size: voBufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-      mappedAtCreation: true,
-    });
-    new Float32Array(voBuffers[i].getMappedRange()).set(verletObjectsData);
-    voBuffers[i].unmap();
-  }
-
   const binParamsArrayLength = 4;
-  const binParams = new Uint32Array([1, 1, 1, 1]);
+  const binSquareSize = verletObjectRadius * 2;
+  const binGridWidth = Math.ceil(canvas.width / binSquareSize);
+  const binGridHeight = Math.ceil(canvas.height / binSquareSize);
+  const binGridSquareCount = binGridWidth * binGridHeight;
+  const binParams = new Uint32Array([
+    binSquareSize,     // bin square size
+    binGridWidth,      // grid width
+    binGridHeight,     // grid height
+    binGridSquareCount // number of grid squares
+  ]);
   const binParamsBufferSize = binParamsArrayLength * Uint32Array.BYTES_PER_ELEMENT;
   const binParamsBuffer = device.createBuffer({
     size: binParamsBufferSize,
@@ -360,6 +380,50 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   }
 
   updateSimParams(0, 0);
+
+  const voBufferSize = verletObjectsSize;
+  const voBuffers: GPUBuffer[] = new Array(2);
+  
+  for (let i = 0; i < 2; ++i) {
+    voBuffers[i] = device.createBuffer({
+      size: voBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      mappedAtCreation: true,
+    });
+    new Float32Array(voBuffers[i].getMappedRange()).set(verletObjectsData);
+    voBuffers[i].unmap();
+  }
+
+  const binBufferSize = verletObjectsSize;
+  const binBuffer = device.createBuffer({
+    size: binBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+  });
+
+  const binSumBufferSize = binGridSquareCount;
+  const binSumBuffer = device.createBuffer({
+    size: binSumBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+  });
+
+  const binPrefixSumBufferSize = binGridSquareCount;
+  const binPrefixSumBuffer = device.createBuffer({
+    size: binPrefixSumBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+  });
+
+  const binIndexTrackerBufferSize = binGridSquareCount;
+  const binIndexTrackerBuffer = device.createBuffer({
+      size: binIndexTrackerBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+  });
+
+  const binReindexBufferSize = verletObjectsSize;
+  const binReindexBuffer = device.createBuffer({
+    size: binReindexBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+  });
+  
   // updateVerletObjects();
 
   const bufferBindGroup = device.createBindGroup({
@@ -398,12 +462,109 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     ],
   });
 
+  const binSumBindGroup: GPUBindGroup = device.createBindGroup({
+    layout: computePipelineBinSum.getBindGroupLayout(0),
+    entries: [{
+        binding: 0,
+        resource: {
+          buffer: voBuffers[0],
+          offset: 0,
+          size: voBufferSize,
+        },
+      }, {
+        binding: 1,
+        resource: {
+          buffer: binParamsBuffer,
+        },
+      }, {
+        binding: 2,
+        resource: {
+          buffer: binBuffer,
+          offset: 0,
+          size: binBufferSize,
+        },
+      }, {
+        binding: 3,
+        resource: {
+          buffer: binSumBuffer,
+          offset: 0,
+          size: binSumBufferSize,
+        },
+      },
+    ],
+  });
+
+  const binPrefixSumBindGroup: GPUBindGroup = device.createBindGroup({
+    layout: computePipelineBinPrefixSum.getBindGroupLayout(0),
+    entries: [{
+        binding: 0,
+        resource: {
+          buffer: binParamsBuffer,
+        },
+      }, {
+        binding: 1,
+        resource: {
+          buffer: binSumBuffer,
+          offset: 0,
+          size: binSumBufferSize,
+        },
+      }, {
+        binding: 2,
+        resource: {
+          buffer: binPrefixSumBuffer,
+          offset: 0,
+          size: binPrefixSumBufferSize,
+        },
+      }, {
+        binding: 3,
+        resource: {
+          buffer: binIndexTrackerBuffer,
+          offset: 0,
+          size: binIndexTrackerBufferSize,
+        },
+      }, 
+    ],
+  });
+
+  const binReindexBindGroup: GPUBindGroup = device.createBindGroup({
+    layout: computePipelineBinReindex.getBindGroupLayout(0),
+    entries: [{
+        binding: 0,
+        resource: {
+          buffer: voBuffers[0],
+          offset: 0,
+          size: voBufferSize,
+        },
+      }, {
+        binding: 1,
+        resource: {
+          buffer: binBuffer,
+          offset: 0,
+          size: binBufferSize,
+        },
+      }, {
+        binding: 2,
+        resource: {
+          buffer: binIndexTrackerBuffer,
+          offset: 0,
+          size: binIndexTrackerBufferSize,
+        },
+      }, {
+        binding: 3,
+        resource: {
+          buffer: binReindexBuffer,
+          offset: 0,
+          size: binReindexBufferSize,
+        },
+      },
+    ],
+  });
+
   const computeBindGroups: GPUBindGroup[] = new Array(2);
   for (let i = 0; i < 2; ++i) {
     computeBindGroups[i] = device.createBindGroup({
       layout: computePipelineMain.getBindGroupLayout(0),
-      entries: [
-        {
+      entries: [{
           binding: 0,
           resource: {
             buffer: simParamsBuffer,
@@ -422,18 +583,37 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
             offset: 0,
             size: voBufferSize,
           },
-        }
+        }, {
+          binding: 3,
+          resource: {
+            buffer: binParamsBuffer,
+          },
+        }, {
+          binding: 4,
+          resource: {
+            buffer: binBuffer,
+            offset: 0,
+            size: binBufferSize,
+          },
+        }, {
+          binding: 5,
+          resource: {
+            buffer: binPrefixSumBuffer,
+            offset: 0,
+            size: binPrefixSumBufferSize,
+          },
+        }, {
+          binding: 6,
+          resource: {
+            buffer: binReindexBuffer,
+            offset: 0,
+            size: binReindexBufferSize,
+          },
+        },
       ],
     });
   }
 
-  const aspect = canvas.width / canvas.height;
-  const projectionMatrix = mat4.perspective(
-    (2 * Math.PI) / 5,
-    aspect,
-    1,
-    100.0
-  );
   const orthoMatrix = mat4.ortho(
     -canvas.width / 2,
     canvas.width / 2,
@@ -518,9 +698,23 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
 
       {
         const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setPipeline(computePipelineBin);
-        passEncoder.setBindGroup(0, computeBindGroups[(t + step - 1) % 2]);
-        passEncoder.dispatchWorkgroups(1);
+        passEncoder.setPipeline(computePipelineBinSum);
+        passEncoder.setBindGroup(0, binSumBindGroup);
+        passEncoder.dispatchWorkgroups(Math.ceil(binGridSquareCount / 64));
+        passEncoder.end();
+      }
+      {
+        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+        passEncoder.setPipeline(computePipelineBinPrefixSum);
+        passEncoder.setBindGroup(0, binPrefixSumBindGroup);
+        passEncoder.dispatchWorkgroups(Math.ceil(binGridSquareCount / 64));
+        passEncoder.end();
+      }
+      {
+        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+        passEncoder.setPipeline(computePipelineBinReindex);
+        passEncoder.setBindGroup(0, binReindexBindGroup);
+        passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
         passEncoder.end();
       }
       {
@@ -541,10 +735,10 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       passEncoder.draw(quad.vertexCount, numVerletObjects, 0, 0);
       // end particles
       // constrain circle
-      passEncoder.setPipeline(boundaryRenderPipeline);
-      passEncoder.setBindGroup(0, boundaryCircleBindGroup);
-      passEncoder.setVertexBuffer(0, quad.verticesBuffer);
-      passEncoder.draw(quad.vertexCount);
+      // passEncoder.setPipeline(boundaryRenderPipeline);
+      // passEncoder.setBindGroup(0, boundaryCircleBindGroup);
+      // passEncoder.setVertexBuffer(0, quad.verticesBuffer);
+      // passEncoder.draw(quad.vertexCount);
       // end constrain circle
       passEncoder.end();
     }
@@ -582,6 +776,20 @@ const GTest: () => JSX.Element = () =>
       }, {
         name: './updateVerlet.wgsl',
         contents: updateVerletWGSL,
+        editable: true,
+      }, {
+        name: './binSum.wgsl',
+        contents: binSumWGSL,
+        editable: true,
+      },
+      {
+        name: './binPrefixSum.wgsl',
+        contents: binPrefixSumWGSL,
+        editable: true,
+      },
+      {
+        name: './binReindex.wgsl',
+        contents: binReindexWGSL,
         editable: true,
       },
     ],
