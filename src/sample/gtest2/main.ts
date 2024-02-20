@@ -1,6 +1,7 @@
 import { mat4, vec2, vec3, vec4, Vec4 } from 'wgpu-matrix';
 import { makeSample, SampleInit } from '../../components/SampleLayout';
 
+import boundaryCircleVertWGSL from './boundaryCircle.vert.wgsl';
 import instancedCircleVertWGSL from './instancedCircle.vert.wgsl';
 import updateVerletWGSL from './updateVerlet.wgsl';
 
@@ -10,6 +11,10 @@ import { HSVtoRGB, lerp } from './utility';
 import { Quad } from './quad';
 
 const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
+  canvas.oncontextmenu = function (e) {
+      e.preventDefault();
+  };
+  
   // The input handler
   const inputHandler = createInputHandler(window, canvas);
 
@@ -55,13 +60,23 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   
   const quad = new Quad(device);
 
-  const computePipeline = device.createComputePipeline({
+  const computePipelineMain = device.createComputePipeline({
     layout: 'auto',
     compute: {
       module: device.createShaderModule({
         code: updateVerletWGSL,
       }),
       entryPoint: 'main',
+    },
+  });
+
+  const computePipelineBin = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({
+        code: updateVerletWGSL,
+      }),
+      entryPoint: 'bin',
     },
   });
 
@@ -76,7 +91,9 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       }),
       entryPoint: 'vertex_main',
       buffers: [{
+        // vertex buffer
         arrayStride: quad.vertexSize,
+        stepMode: 'vertex',
         attributes: [{
             // position
             shaderLocation: 0,
@@ -88,7 +105,33 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
             offset: quad.uvOffset,
             format: 'float32x2',
           },],
-        },
+        }, {
+          // instanced particles buffer
+          arrayStride: 16 * 4,
+          stepMode: 'instance',
+          attributes: [{
+              // instance position
+              shaderLocation: 2,
+              offset: 0,
+              format: 'float32x4',
+            }, {
+              // instance previous position
+              shaderLocation: 3,
+              offset: 4 * 4,
+              format: 'float32x4',
+            }, {
+              // instance acceleration
+              shaderLocation: 4,
+              offset: 8 * 4,
+              format: 'float32x4',
+            }, {
+              // instance rgb-Radius
+              shaderLocation: 5,
+              offset: 12 * 4,
+              format: 'float32x4',
+            },
+          ],
+        }
       ],
     },
     fragment: {
@@ -124,7 +167,66 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     multisample: {
       count: sampleCount,
     },
-    
+  });
+
+  const boundaryRenderPipeline = device.createRenderPipeline({
+    layout: 'auto',
+    vertex: {
+      module: device.createShaderModule({
+        code: boundaryCircleVertWGSL,
+      }),
+      entryPoint: 'vertex_main',
+      buffers: [{
+        // vertex buffer
+        arrayStride: quad.vertexSize,
+        stepMode: 'vertex',
+        attributes: [{
+            // position
+            shaderLocation: 0,
+            offset: quad.positionOffset,
+            format: 'float32x4',
+          }, {
+            // uv
+            shaderLocation: 1,
+            offset: quad.uvOffset,
+            format: 'float32x2',
+          },],
+        },
+      ],
+    },
+    fragment: {
+      module: device.createShaderModule({
+        code: boundaryCircleVertWGSL,
+      }),
+      entryPoint: 'fragment_main',
+      targets: [{
+          format: presentationFormat,
+          blend: {
+            color: {
+              srcFactor: 'src-alpha',
+              dstFactor: 'one',
+              operation: 'add',
+            },
+            alpha: {
+              srcFactor: 'zero',
+              dstFactor: 'one',
+              operation: 'add',
+            },
+          }
+        },
+      ],
+    },
+    primitive: {
+      topology: 'triangle-list',
+    },
+    depthStencil: {
+      depthWriteEnabled: false,
+      depthCompare: 'less',
+      format: 'depth24plus',
+    },
+    multisample: {
+      count: sampleCount,
+    },
   });
 
   const texture = device.createTexture({
@@ -141,29 +243,29 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
 
-  const numVerletObjects = 100000;
-  //     0     1     2         3         4       5       6       7  8  9
-  // f32 xpos, ypos, prevXPos, prevYPos, accelX, accelY, radius, r, g, b
-  const verletObjectNumFloats = 10;
+  const numVerletObjects = 1000;
+  // 0, 1, 2, 3,    4, 5, 6, 7,        8, 9, 10, 11,    12, 13, 14, 15,
+  // vec4<f32> pos, vec4<f32> prevPos, vec4<f32> accel, vec4<f32> rgbR
+  const verletObjectNumFloats = 16;
   const verletObjectsData = new Float32Array(verletObjectNumFloats * numVerletObjects);
   const verletObjectsSize = Float32Array.BYTES_PER_ELEMENT * verletObjectNumFloats * numVerletObjects;
   const verletObjectsOffset = 0;
 
-  for (let i = 0; i < 200 * verletObjectNumFloats; ) {
+  for (let i = 0; i < numVerletObjects * verletObjectNumFloats; ) {
     const xpos = (Math.random() * canvas.width) - (canvas.width / 2);
     const ypos = (Math.random() * canvas.height) - (canvas.height / 2);
     verletObjectsData[i] = xpos;
     verletObjectsData[i+1] = ypos;
-    verletObjectsData[i+2] = xpos;
-    verletObjectsData[i+3] = ypos;
-
-    verletObjectsData[i+6] = 3;
+    verletObjectsData[i+4] = xpos;
+    verletObjectsData[i+5] = ypos;
 
     const rgb = HSVtoRGB(0, lerp(0.2, 0.7, Math.random()), 1);
 
-    verletObjectsData[i+7] = rgb.r;
-    verletObjectsData[i+8] = rgb.g;
-    verletObjectsData[i+9] = rgb.b;
+    verletObjectsData[i+12] = rgb.r;
+    verletObjectsData[i+13] = rgb.g;
+    verletObjectsData[i+14] = rgb.b;
+
+    verletObjectsData[i+15] = 3;
     i += verletObjectNumFloats;
   }
   
@@ -195,32 +297,35 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     return false;
   }
 
-  function accelerateVerletObjects(dt: number) {
-    for (let i = 0; i < numVerletObjects * verletObjectNumFloats; ) {
-      if (verletObjectsData[i+7] != 0 && verletObjectsData[i+8] != 0 && verletObjectsData[i+9] != 0) {
-        verletObjectsData[i+5] = -100 * (dt * dt);
-
-        return true;
-      }
-
-      i += verletObjectNumFloats;
-    }
-
-    return false;
-  }
-
   function updateVerletObjects() {
-    device.queue.writeBuffer(
-      storageBuffer,
-      verletObjectsOffset,
-      verletObjectsData
-    );
+    for (let i = 0; i < 2; ++i) {
+      device.queue.writeBuffer(
+        voBuffers[i],
+        verletObjectsOffset,
+        verletObjectsData
+      );
+    }
   }
 
-  const storageBufferSize = verletObjectsSize;
-  const storageBuffer = device.createBuffer({
-    size: storageBufferSize,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  const voBufferSize = verletObjectsSize;
+  const voBuffers: GPUBuffer[] = new Array(2);
+  
+  for (let i = 0; i < 2; ++i) {
+    voBuffers[i] = device.createBuffer({
+      size: voBufferSize,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      mappedAtCreation: true,
+    });
+    new Float32Array(voBuffers[i].getMappedRange()).set(verletObjectsData);
+    voBuffers[i].unmap();
+  }
+
+  const binParamsArrayLength = 4;
+  const binParams = new Uint32Array([1, 1, 1, 1]);
+  const binParamsBufferSize = binParamsArrayLength * Uint32Array.BYTES_PER_ELEMENT;
+  const binParamsBuffer = device.createBuffer({
+    size: binParamsBufferSize,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
   const mvpMatBufferSize = Float32Array.BYTES_PER_ELEMENT * 16;
@@ -229,33 +334,33 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  const simParams = {
-    totalTime: 0,
-    deltaTime: 0,
-    unused2: 0,
-    unused3: 0,
-  };
-  const paramsBufferSize = 4 * Float32Array.BYTES_PER_ELEMENT;
-  const paramsBuffer = device.createBuffer({
-    size: paramsBufferSize,
+  // f32 deltaTime, f32 totalTime, f32 constrainRadius, f32 unused, vec4<f32> constrainCenter, vec4<f32> clickPoint
+  const simParamsArrayLength = 12;
+  const simParams = new Float32Array(simParamsArrayLength);
+  const simParamsBufferSize = simParamsArrayLength * Float32Array.BYTES_PER_ELEMENT;
+  const simParamsBuffer = device.createBuffer({
+    size: simParamsBufferSize,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  function updateSimParams(totalTime: number, deltaTime: number) {
-    simParams.totalTime = totalTime;
-    simParams.deltaTime = deltaTime;
+  simParams[2] = (canvas.height / 2) - 20;
+  // simParams[4] = (canvas.width / 2);
+  // simParams[5] = (canvas.height / 2);
+
+  function updateSimParams(totalTime: number, deltaTime: number, clickPointX = 0, clickPointY = 0) {
+    simParams[0] = totalTime;
+    simParams[1] = deltaTime;
+    simParams[8] = clickPointX;
+    simParams[9] = clickPointY;
     device.queue.writeBuffer(
-      paramsBuffer,
+      simParamsBuffer,
       0,
-      new Float32Array([
-        simParams.totalTime,
-        simParams.deltaTime
-      ])
+      simParams
     );
   }
 
   updateSimParams(0, 0);
-  updateVerletObjects();
+  // updateVerletObjects();
 
   const bufferBindGroup = device.createBindGroup({
     layout: renderPipeline.getBindGroupLayout(0),
@@ -269,35 +374,58 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       {
         binding: 1,
         resource: {
-          buffer: paramsBuffer,
-        },
-      },
-      {
-        binding: 2,
-        resource: {
-          buffer: storageBuffer,
+          buffer: simParamsBuffer,
         },
       }
     ],
   });
 
-  const computeBindGroup = device.createBindGroup({
-    layout: computePipeline.getBindGroupLayout(0),
+  const boundaryCircleBindGroup = device.createBindGroup({
+    layout: boundaryRenderPipeline.getBindGroupLayout(0),
     entries: [
       {
         binding: 0,
         resource: {
-          buffer: paramsBuffer,
+          buffer: mvpMatBuffer,
         },
       },
       {
         binding: 1,
         resource: {
-          buffer: storageBuffer,
+          buffer: simParamsBuffer,
         },
       }
     ],
   });
+
+  const computeBindGroups: GPUBindGroup[] = new Array(2);
+  for (let i = 0; i < 2; ++i) {
+    computeBindGroups[i] = device.createBindGroup({
+      layout: computePipelineMain.getBindGroupLayout(0),
+      entries: [
+        {
+          binding: 0,
+          resource: {
+            buffer: simParamsBuffer,
+          },
+        }, {
+          binding: 1,
+          resource: {
+            buffer: voBuffers[i],
+            offset: 0,
+            size: voBufferSize,
+          },
+        }, {
+          binding: 2,
+          resource: {
+            buffer: voBuffers[(i + 1) % 2],
+            offset: 0,
+            size: voBufferSize,
+          },
+        }
+      ],
+    });
+  }
 
   const aspect = canvas.width / canvas.height;
   const projectionMatrix = mat4.perspective(
@@ -333,24 +461,30 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
 
   let startFrameMS = Date.now();
   let lastFrameMS = Date.now();
-
+  let t = 0;
   function frame() {
     stats.begin();
 
     const now = Date.now();
-    const deltaTime = (now - lastFrameMS) / 1000;
+    const deltaTime = Math.min((now - lastFrameMS) / 1000, 1 / 60);
     const totalTime = (now - startFrameMS) / 1000;
-    lastFrameMS = now;
-
-    updateSimParams(totalTime, deltaTime);
-
+    
     const input = inputHandler();
     if (input.analog.left) {
       addVerletObject(input.analog.clickX, input.analog.clickY);
     }
 
-    accelerateVerletObjects(deltaTime);
-    updateVerletObjects();
+    let clickPointX = 0;
+    let clickPointY = 0;
+    if (input.analog.right) {
+      clickPointX = input.analog.clickX - (canvas.width / 2);
+      clickPointY = input.analog.clickY - (canvas.height / 2);
+    }
+
+    updateSimParams(totalTime, deltaTime, clickPointX, clickPointY);
+
+    // accelerateVerletObjects(deltaTime);
+    // updateVerletObjects();
 
     // Sample is no longer the active page.
     if (!pageState.active) return;
@@ -375,25 +509,52 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     };
     
     const commandEncoder = device.createCommandEncoder();
-    {
-      const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-      passEncoder.setPipeline(computePipeline);
-      passEncoder.setBindGroup(0, computeBindGroup);
-      passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
-      passEncoder.end();
+    
+    const timesteps = 12;
+    const subDeltaTime = deltaTime / timesteps;
+    for (let step = 0; step <= timesteps; ++step) {
+      const subTotalTime = totalTime - (subDeltaTime * (timesteps - (step + 1)));
+      updateSimParams(subTotalTime, subDeltaTime, clickPointX, clickPointY);
+
+      {
+        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+        passEncoder.setPipeline(computePipelineBin);
+        passEncoder.setBindGroup(0, computeBindGroups[(t + step - 1) % 2]);
+        passEncoder.dispatchWorkgroups(1);
+        passEncoder.end();
+      }
+      {
+        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+        passEncoder.setPipeline(computePipelineMain);
+        passEncoder.setBindGroup(0, computeBindGroups[(t + step) % 2]);
+        passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
+        passEncoder.end();
+      }
     }
     {
       const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+      // particles
       passEncoder.setPipeline(renderPipeline);
       passEncoder.setBindGroup(0, bufferBindGroup);
       passEncoder.setVertexBuffer(0, quad.verticesBuffer);
+      passEncoder.setVertexBuffer(1, voBuffers[(t + 1) % 2]);
       passEncoder.draw(quad.vertexCount, numVerletObjects, 0, 0);
+      // end particles
+      // constrain circle
+      passEncoder.setPipeline(boundaryRenderPipeline);
+      passEncoder.setBindGroup(0, boundaryCircleBindGroup);
+      passEncoder.setVertexBuffer(0, quad.verticesBuffer);
+      passEncoder.draw(quad.vertexCount);
+      // end constrain circle
       passEncoder.end();
-      device.queue.submit([commandEncoder.finish()]);
     }
+
+    device.queue.submit([commandEncoder.finish()]);
 
     stats.end()
 
+    ++t;
+    lastFrameMS = now;
     requestAnimationFrame(frame);
   }
 
@@ -413,6 +574,10 @@ const GTest: () => JSX.Element = () =>
       }, {
         name: './instancedCircle.vert.wgsl',
         contents: instancedCircleVertWGSL,
+        editable: true,
+      }, {
+        name: './boundaryCircle.vert.wgsl',
+        contents: boundaryCircleVertWGSL,
         editable: true,
       }, {
         name: './updateVerlet.wgsl',

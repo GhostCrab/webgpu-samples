@@ -137,6 +137,10 @@ export function createInputHandler(
     mouseDown = false;
   });
   canvas.addEventListener('pointermove', (e) => {
+    var rect = canvas.getBoundingClientRect();
+    clickX = e.clientX - rect.left;
+    clickY = e.clientY - rect.top;
+
     mouseDown = e.pointerType == 'mouse' ? (e.buttons & 1) !== 0 : true;
     if (mouseDown) {
       analog.x += e.movementX;
