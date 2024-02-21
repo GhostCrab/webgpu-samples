@@ -266,8 +266,8 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
 
-  const verletObjectRadius = 1;
-  const numVerletObjects = 4000;
+  const verletObjectRadius = .4;
+  const numVerletObjects = 2000000;
   // 0, 1, 2, 3,    4, 5, 6, 7,        8, 9, 10, 11,    12, 13, 14, 15,
   // vec4<f32> pos, vec4<f32> prevPos, vec4<f32> accel, vec4<f32> rgbR
   const verletObjectNumFloats = 16;
@@ -283,7 +283,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     verletObjectsData[i+4] = xpos;
     verletObjectsData[i+5] = ypos;
 
-    const rgb = HSVtoRGB(0, lerp(0.6, 0.9, Math.random()), 1);
+    const rgb = HSVtoRGB(.12, lerp(0.6, 0.9, Math.random()), 1);
 
     verletObjectsData[i+12] = rgb.r;
     verletObjectsData[i+13] = rgb.g;
@@ -334,8 +334,8 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   const gridPixelDim = canvas.height;
   const binParamsArrayLength = 4;
   const binSquareSize = Math.max(verletObjectRadius * 2, 20);
-  const binGridWidth = Math.ceil(gridPixelDim / binSquareSize);
-  const binGridHeight = Math.ceil(gridPixelDim / binSquareSize);
+  const binGridWidth = Math.ceil((gridPixelDim / binSquareSize) / 2) * 2;
+  const binGridHeight = Math.ceil((gridPixelDim / binSquareSize) / 2) * 2;
   const binGridSquareCount = Math.ceil((binGridWidth * binGridHeight) / 4) * 4;
   const binParams = new Uint32Array([
     binSquareSize,     // bin square size
@@ -719,33 +719,33 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     
     const commandEncoder = device.createCommandEncoder();
     
-    const timesteps = 12;
+    const timesteps = 2;
     const subDeltaTime = deltaTime / timesteps;
     for (let step = 0; step <= timesteps; ++step) {
       const subTotalTime = totalTime - (subDeltaTime * (timesteps - (step + 1)));
       updateSimParams(subTotalTime, subDeltaTime, clickPointX, clickPointY);
 
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setPipeline(computePipelineBinSum);
-        passEncoder.setBindGroup(0, binSumBindGroup);
-        passEncoder.dispatchWorkgroups(Math.ceil(binGridSquareCount / 64));
-        passEncoder.end();
-      }
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setPipeline(computePipelineBinPrefixSum);
-        passEncoder.setBindGroup(0, binPrefixSumBindGroup);
-        passEncoder.dispatchWorkgroups(Math.ceil(binGridSquareCount / 64));
-        passEncoder.end();
-      }
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setPipeline(computePipelineBinReindex);
-        passEncoder.setBindGroup(0, binReindexBindGroup);
-        passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
-        passEncoder.end();
-      }
+      // {
+      //   const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+      //   passEncoder.setPipeline(computePipelineBinSum);
+      //   passEncoder.setBindGroup(0, binSumBindGroup);
+      //   passEncoder.dispatchWorkgroups(Math.ceil(binGridSquareCount / 64));
+      //   passEncoder.end();
+      // }
+      // {
+      //   const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+      //   passEncoder.setPipeline(computePipelineBinPrefixSum);
+      //   passEncoder.setBindGroup(0, binPrefixSumBindGroup);
+      //   passEncoder.dispatchWorkgroups(Math.ceil(binGridSquareCount / 64));
+      //   passEncoder.end();
+      // }
+      // {
+      //   const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+      //   passEncoder.setPipeline(computePipelineBinReindex);
+      //   passEncoder.setBindGroup(0, binReindexBindGroup);
+      //   passEncoder.dispatchWorkgroups(Math.ceil(numVerletObjects / 64));
+      //   passEncoder.end();
+      // }
       {
         const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
         passEncoder.setPipeline(computePipelineMain);

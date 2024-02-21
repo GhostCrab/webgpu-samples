@@ -2,7 +2,7 @@ struct Params {
   totalTime: f32,
   deltaTime: f32,
   constrainRadius: f32,
-  gridPixelDim: f32,
+  unused2: f32,
   constrainCenter: vec4<f32>,
   clickPoint: vec4<f32>,
 };
@@ -57,8 +57,8 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
   }
 
   var bin = binBuf[index];
-  var useBins = true;
-  var doCollide = false;
+  var useBins = false;
+  var useCollide = false;
 
   var constrainPos = params.constrainCenter.xy;
   var constrainRadius = params.constrainRadius;
@@ -88,93 +88,42 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
   var offset = vec2(0.0);
   if (useBins) {
     var binXY = oneToTwo(bin, binParams.x);
-    var startBin = binXY;
-    startBin.x -= 1;
-    startBin.y -= 1;
-    
+    var startBin = binXY - vec2<i32>(1,1);
     var currentBin = startBin;
 
-    var surroundingBins = array<i32, 9>(
-      bin - binParams.x - 1, bin - binParams.x, bin - binParams.x + 1,
-      bin - 1,               bin,               bin + 1,
-      bin + binParams.x - 1, bin + binParams.x, bin + binParams.x + 1,
-    );
-    
-    for (var surroundingBinIndex = 0; surroundingBinIndex < 9; surroundingBinIndex++) {
-      var neighborBinIndex = surroundingBins[surroundingBinIndex];
-      if (neighborBinIndex <= 0 || neighborBinIndex >= binParams.count) {
-        continue;
-      }
+    for (var y = 0; y < 3; y++) {
+      currentBin.y = startBin.y + y;
+      if (currentBin.y < 0 || currentBin.y > binParams.y) { continue; }
 
-      for (var i = binPrefixSumBuf[neighborBinIndex - 1]; i < binPrefixSumBuf[neighborBinIndex]; i++) {
-        var otherIndex = binReindexBuf[i];
-        if (otherIndex != index) {
-          var _pos = verletObjectsIn[otherIndex].pos.xy;
-          var _radius = verletObjectsIn[otherIndex].colorAndRadius.w;
+      for (var x = 0; x < 3; x++) {
+        currentBin.x = startBin.x + x;
+        if (currentBin.x < 0 || currentBin.x > binParams.x) { continue; }
 
-          var v = pos - _pos;
-          var dist2 = (v.x * v.x) + (v.y * v.y);
-          var minDist = radius + _radius;
-          if (dist2 < minDist * minDist) {
-            var dist = sqrt(dist2);
-            var n = v / dist;
+        var binIndex = twoToOne(currentBin, binParams.x);
 
-            var massRatio = 0.5;
-            var responseCoef = 0.65;
-            var delta = 0.5 * responseCoef * (dist - minDist);
-            offset += n * (massRatio * delta);
+        for (var i = binPrefixSumBuf[binIndex - 1]; i < binPrefixSumBuf[binIndex]; i++) {
+          var otherIndex = binReindexBuf[i];
+          if (otherIndex != index && verletObjectsIn[i].colorAndRadius.w == 0) {
+            var _pos = verletObjectsIn[i].pos.xy;
+            var _radius = verletObjectsIn[i].colorAndRadius.w;
+
+            var v = pos - _pos;
+            var dist2 = (v.x * v.x) + (v.y * v.y);
+            var minDist = radius + _radius;
+            if (dist2 < minDist * minDist) {
+              var dist = sqrt(dist2);
+              var n = v / dist;
+
+              var massRatio = 0.5;
+              var responseCoef = 0.65;
+              var delta = 0.5 * responseCoef * (dist - minDist);
+              offset += n * (massRatio * delta);
+            }
           }
         }
       }
     }
-
-    // var use1 = binReindexBuf[0];
-    // var use2 = binPrefixSumBuf[0];
-
-    // var binXY = oneToTwo(bin, binParams.x);
-    // var startBin = binXY;
-    // startBin.x -= 1;
-    // startBin.y -= 1;
-    // var currentBin = startBin;
-
-    // var surroundingBins = array<i32, 9>(
-    //   bin - binParams.x - 1, bin - binParams.x, bin - binParams.x + 1,
-    //   bin - 1,               bin,               bin + 1,
-    //   bin + binParams.x - 1, bin + binParams.x, bin + binParams.x + 1,
-    // );
-
-    // for (var i = 0u; i < arrayLength(&verletObjectsIn); i++) {
-    //   if (i == index) {
-    //     continue;
-    //   }
-
-    //   if (binBuf[i] == surroundingBins[0] ||
-    //       binBuf[i] == surroundingBins[1] ||
-    //       binBuf[i] == surroundingBins[2] ||
-    //       binBuf[i] == surroundingBins[3] ||
-    //       binBuf[i] == surroundingBins[4] ||
-    //       binBuf[i] == surroundingBins[5] ||
-    //       binBuf[i] == surroundingBins[6] ||
-    //       binBuf[i] == surroundingBins[7] ||
-    //       binBuf[i] == surroundingBins[8]) {
-    //     var _pos = verletObjectsIn[i].pos.xy;
-    //     var _radius = verletObjectsIn[i].colorAndRadius.w;
-
-    //     var v = pos - _pos;
-    //     var dist2 = (v.x * v.x) + (v.y * v.y);
-    //     var minDist = radius + _radius;
-    //     if (dist2 < minDist * minDist) {
-    //       var dist = sqrt(dist2);
-    //       var n = v / dist;
-
-    //       var massRatio = 0.5;
-    //       var responseCoef = 0.65;
-    //       var delta = 0.5 * responseCoef * (dist - minDist);
-    //       offset += n * (massRatio * delta);
-    //     }
-    //   }
-    // }
-  } else if (doCollide) {
+  } else if (useCollide) {
     for (var i = 0u; i < arrayLength(&verletObjectsIn); i++) {
       if (i == index || verletObjectsIn[i].colorAndRadius.w == 0) {
         continue;
@@ -209,7 +158,7 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
       pos = constrainPos - (n * (constrainRadius - radius));
 
       var prevVec = prevPos - pos;
-      prevVec *= 0.9;
+      prevVec *= 0.999;
       prevPos = pos + prevVec;
     }
   }
@@ -226,8 +175,6 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
     verletObjectsOut[index].pos = vec4(pos.xy, 0, 0);
     verletObjectsOut[index].prevPos = vec4(prevPos.xy, 0, 0);
 
-    var binPosX = i32((pos.x + (params.gridPixelDim / 2.0)) / f32(binParams.size));
-    var binPosY = i32((pos.y + (params.gridPixelDim / 2.0)) / f32(binParams.size));
-    binBuf[index] = twoToOne(vec2<i32>(binPosX, binPosY), binParams.x);
+    binBuf[index] = i32(pos.x / f32(binParams.count)) + (i32(pos.y / f32(binParams.count)) * binParams.x);
   }
 }
