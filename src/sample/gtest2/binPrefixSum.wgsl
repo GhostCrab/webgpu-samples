@@ -5,18 +5,17 @@ struct BinParams {
   count: i32,
 }
 
-@group(0) @binding(0) var<uniform>             binParams: BinParams;
-@group(0) @binding(1) var<storage, read>       binSumBuf: array<u32>;
-@group(0) @binding(2) var<storage, read_write> binPrefixSumBuf: array<i32>;
-@group(0) @binding(3) var<storage, read_write> binIndexTrackerBuf: array<atomic<i32>>;
+@group(0) @binding(0) var<storage, read>       binSumBuf: array<u32>;
+@group(0) @binding(1) var<storage, read_write> binPrefixSumBuf: array<i32>;
+@group(0) @binding(2) var<storage, read_write> binIndexTrackerBuf: array<atomic<i32>>;
 
 @compute @workgroup_size(64)
 fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
   var index = i32(GlobalInvocationID.x);
 
-  if (index >= binParams.count) {
-    return;
-  }
+  // if (index >= binParams.count) {
+  //   return;
+  // }
 
   binPrefixSumBuf[index] = 0;
 
@@ -24,9 +23,9 @@ fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
     binPrefixSumBuf[index] += i32(binSumBuf[i]);
   }
 
-  // storageBarrier();
+  storageBarrier();
 
-  // atomicStore(&binIndexTrackerBuf[index], 0);
+  atomicStore(&binIndexTrackerBuf[index], 0);
   if (index > 0) {
     atomicStore(&binIndexTrackerBuf[index], binPrefixSumBuf[index - 1]);
   }

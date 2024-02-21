@@ -14,7 +14,7 @@ struct BinParams {
 
 @group(0) @binding(0) var<storage, read>       verletObjectsIn: array<VerletObject>;
 @group(0) @binding(1) var<uniform>             binParams: BinParams;
-@group(0) @binding(2) var<storage, read> binBuf: array<i32>;
+@group(0) @binding(2) var<storage, read>       binBuf: array<i32>;
 @group(0) @binding(3) var<storage, read_write> binSumBuf: array<atomic<u32>>;
 
 @compute @workgroup_size(64)

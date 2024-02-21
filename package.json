@@ -27,7 +27,8 @@
     "stanford-dragon": "1.1.1",
     "stats-js": "^1.0.1",
     "teapot": "1.0.0",
-    "wgpu-matrix": "^2.5.0"
+    "wgpu-matrix": "^2.5.0",
+    "wgsl-debug": "^0.0.1"
   },
   "devDependencies": {
     "@next/eslint-plugin-next": "^13.0.0",

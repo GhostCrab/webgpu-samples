@@ -8,8 +8,8 @@ import binSumWGSL from './binSum.wgsl';
 import binPrefixSumWGSL from './binPrefixSum.wgsl';
 import binReindexWGSL from './binReindex.wgsl';
 
-import { ArcballCamera, WASDCamera, cameraSourceInfo } from './camera';
-import { createInputHandler, inputSourceInfo } from './input';
+import { ArcballCamera, WASDCamera } from './camera';
+import { createInputHandler } from './input';
 import { HSVtoRGB, lerp } from './utility';
 import { Quad } from './quad';
 
@@ -267,7 +267,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   });
 
   const verletObjectRadius = 1;
-  const numVerletObjects = 650000;
+  const numVerletObjects = 4000;
   // 0, 1, 2, 3,    4, 5, 6, 7,        8, 9, 10, 11,    12, 13, 14, 15,
   // vec4<f32> pos, vec4<f32> prevPos, vec4<f32> accel, vec4<f32> rgbR
   const verletObjectNumFloats = 16;
@@ -331,11 +331,12 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     }
   }
 
+  const gridPixelDim = canvas.height;
   const binParamsArrayLength = 4;
-  const binSquareSize = verletObjectRadius * 2;
-  const binGridWidth = Math.ceil(canvas.width / binSquareSize);
-  const binGridHeight = Math.ceil(canvas.height / binSquareSize);
-  const binGridSquareCount = binGridWidth * binGridHeight;
+  const binSquareSize = Math.max(verletObjectRadius * 2, 20);
+  const binGridWidth = Math.ceil(gridPixelDim / binSquareSize);
+  const binGridHeight = Math.ceil(gridPixelDim / binSquareSize);
+  const binGridSquareCount = Math.ceil((binGridWidth * binGridHeight) / 4) * 4;
   const binParams = new Uint32Array([
     binSquareSize,     // bin square size
     binGridWidth,      // grid width
@@ -348,14 +349,16 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
+  device.queue.writeBuffer(binParamsBuffer, 0, binParams);
+
   const mvpMatBufferSize = Float32Array.BYTES_PER_ELEMENT * 16;
   const mvpMatBuffer = device.createBuffer({
     size: mvpMatBufferSize,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  // f32 deltaTime, f32 totalTime, f32 constrainRadius, f32 unused, vec4<f32> constrainCenter, vec4<f32> clickPoint
-  const simParamsArrayLength = 12;
+  // f32 deltaTime, f32 totalTime, f32 constrainRadius, f32 boxDim, vec4<f32> constrainCenter, vec4<f32> clickPoint
+  const simParamsArrayLength = 20;
   const simParams = new Float32Array(simParamsArrayLength);
   const simParamsBufferSize = simParamsArrayLength * Float32Array.BYTES_PER_ELEMENT;
   const simParamsBuffer = device.createBuffer({
@@ -364,6 +367,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   });
 
   simParams[2] = (canvas.height / 2) - 20;
+  simParams[3] = gridPixelDim;
   // simParams[4] = (canvas.width / 2);
   // simParams[5] = (canvas.height / 2);
 
@@ -387,42 +391,72 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   for (let i = 0; i < 2; ++i) {
     voBuffers[i] = device.createBuffer({
       size: voBufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
       mappedAtCreation: true,
     });
     new Float32Array(voBuffers[i].getMappedRange()).set(verletObjectsData);
     voBuffers[i].unmap();
   }
 
-  const binBufferSize = verletObjectsSize;
+  const voReadBuffer: GPUBuffer = device.createBuffer({
+    size: voBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  });
+
+  const binBufferSize = Int32Array.BYTES_PER_ELEMENT * numVerletObjects;
   const binBuffer = device.createBuffer({
     size: binBufferSize,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   });
 
-  const binSumBufferSize = binGridSquareCount;
+  const binReadBuffer: GPUBuffer = device.createBuffer({
+    size: binBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binSumBufferSize = Uint32Array.BYTES_PER_ELEMENT * binGridSquareCount;
   const binSumBuffer = device.createBuffer({
     size: binSumBufferSize,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   });
 
-  const binPrefixSumBufferSize = binGridSquareCount;
+  const binSumReadBuffer: GPUBuffer = device.createBuffer({
+    size: binSumBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binPrefixSumBufferSize = Int32Array.BYTES_PER_ELEMENT * binGridSquareCount;
   const binPrefixSumBuffer = device.createBuffer({
     size: binPrefixSumBufferSize,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   });
 
-  const binIndexTrackerBufferSize = binGridSquareCount;
+  const binPrefixSumReadBuffer: GPUBuffer = device.createBuffer({
+    size: binPrefixSumBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binIndexTrackerBufferSize = Int32Array.BYTES_PER_ELEMENT * binGridSquareCount;
   const binIndexTrackerBuffer = device.createBuffer({
       size: binIndexTrackerBufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   });
 
-  const binReindexBufferSize = verletObjectsSize;
+  const binIndexTrackerReadBuffer: GPUBuffer = device.createBuffer({
+    size: binIndexTrackerBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binReindexBufferSize = Uint32Array.BYTES_PER_ELEMENT * numVerletObjects;
   const binReindexBuffer = device.createBuffer({
     size: binReindexBufferSize,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
   });
+
+  const binReindexReadBuffer: GPUBuffer = device.createBuffer({
+    size: binReindexBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
   
   // updateVerletObjects();
 
@@ -499,24 +533,19 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     entries: [{
         binding: 0,
         resource: {
-          buffer: binParamsBuffer,
-        },
-      }, {
-        binding: 1,
-        resource: {
           buffer: binSumBuffer,
           offset: 0,
           size: binSumBufferSize,
         },
       }, {
-        binding: 2,
+        binding: 1,
         resource: {
           buffer: binPrefixSumBuffer,
           offset: 0,
           size: binPrefixSumBufferSize,
         },
       }, {
-        binding: 3,
+        binding: 2,
         resource: {
           buffer: binIndexTrackerBuffer,
           offset: 0,
@@ -642,7 +671,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   let startFrameMS = Date.now();
   let lastFrameMS = Date.now();
   let t = 0;
-  function frame() {
+  async function frame() {
     stats.begin();
 
     const now = Date.now();
@@ -744,6 +773,73 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     }
 
     device.queue.submit([commandEncoder.finish()]);
+
+    /*
+    { //1
+      const commandEncoder2 = device.createCommandEncoder();
+      commandEncoder2.copyBufferToBuffer(binBuffer, 0, binReadBuffer, 0, binBufferSize);
+
+      await binReadBuffer.mapAsync(GPUMapMode.READ, 0, binBufferSize);
+      const copyArrayBuffer = binReadBuffer.getMappedRange(0, binBufferSize);
+      const data = copyArrayBuffer.slice(0);
+      binReadBuffer.unmap();
+      console.log(new Int32Array(data));
+
+      device.queue.submit([commandEncoder2.finish()]);
+    }
+
+    { //2
+      const commandEncoder2 = device.createCommandEncoder();
+      commandEncoder2.copyBufferToBuffer(binSumBuffer, 0, binSumReadBuffer, 0, binSumBufferSize);
+
+      await binSumReadBuffer.mapAsync(GPUMapMode.READ, 0, binSumBufferSize);
+      const copyArrayBuffer = binSumReadBuffer.getMappedRange(0, binSumBufferSize);
+      const data = copyArrayBuffer.slice(0);
+      binSumReadBuffer.unmap();
+      console.log(new Uint32Array(data));
+
+      device.queue.submit([commandEncoder2.finish()]);
+    }
+
+    { //3
+      const commandEncoder2 = device.createCommandEncoder();
+      commandEncoder2.copyBufferToBuffer(binPrefixSumBuffer, 0, binPrefixSumReadBuffer, 0, binPrefixSumBufferSize);
+
+      await binPrefixSumReadBuffer.mapAsync(GPUMapMode.READ, 0, binPrefixSumBufferSize);
+      const copyArrayBuffer = binPrefixSumReadBuffer.getMappedRange(0, binPrefixSumBufferSize);
+      const data = copyArrayBuffer.slice(0);
+      binPrefixSumReadBuffer.unmap();
+      console.log(new Int32Array(data));
+
+      device.queue.submit([commandEncoder2.finish()]);
+    }
+
+    { //4
+      const commandEncoder2 = device.createCommandEncoder();
+      commandEncoder2.copyBufferToBuffer(binIndexTrackerBuffer, 0, binIndexTrackerReadBuffer, 0, binIndexTrackerBufferSize);
+
+      await binIndexTrackerReadBuffer.mapAsync(GPUMapMode.READ, 0, binIndexTrackerBufferSize);
+      const copyArrayBuffer = binIndexTrackerReadBuffer.getMappedRange(0, binIndexTrackerBufferSize);
+      const data = copyArrayBuffer.slice(0);
+      binIndexTrackerReadBuffer.unmap();
+      console.log(new Int32Array(data));
+
+      device.queue.submit([commandEncoder2.finish()]);
+    }
+
+    { //5
+      const commandEncoder2 = device.createCommandEncoder();
+      commandEncoder2.copyBufferToBuffer(binReindexBuffer, 0, binReindexReadBuffer, 0, binReindexBufferSize);
+
+      await binReindexReadBuffer.mapAsync(GPUMapMode.READ, 0, binReindexBufferSize);
+      const copyArrayBuffer = binReindexReadBuffer.getMappedRange(0, binReindexBufferSize);
+      const data = copyArrayBuffer.slice(0);
+      binReindexReadBuffer.unmap();
+      console.log(new Uint32Array(data));
+
+      device.queue.submit([commandEncoder2.finish()]);
+    }
+    */
 
     stats.end()
 
