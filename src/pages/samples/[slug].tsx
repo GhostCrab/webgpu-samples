@@ -47,6 +47,7 @@ export const pages: PageComponentType = {
   gtest: dynamic(() => import('../../sample/gtest/main')),
   gtest2: dynamic(() => import('../../sample/gtest2/main')),
   gtest3: dynamic(() => import('../../sample/gtest3/main')),
+  gtest4: dynamic(() => import('../../sample/gtest4/main')),
   renderBundles: dynamic(() => import('../../sample/renderBundles/main')),
   worker: dynamic(() => import('../../sample/worker/main')),
   'A-buffer': dynamic(() => import('../../sample/a-buffer/main')),

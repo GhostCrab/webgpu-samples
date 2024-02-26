@@ -63,11 +63,23 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       visibility: GPUShaderStage.COMPUTE,
       buffer: { type: 'storage' },
     }, {
-      binding:  2, // binIn
+      binding:  2, // bin
       visibility: GPUShaderStage.COMPUTE,
-      buffer: { type: 'read-only-storage' },
+      buffer: { type: 'storage' },
     }, {
-      binding:  3, // binOut
+      binding:  3, // binSum
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type: 'storage' },
+    }, {
+      binding:  4, // binPrefixSum
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type: 'storage' },
+    }, {
+      binding:  5, // binIndexTracker
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type: 'storage' },
+    }, {
+      binding:  6, // binReindex
       visibility: GPUShaderStage.COMPUTE,
       buffer: { type: 'storage' },
     }]
@@ -84,39 +96,10 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     layout: computePipelineLayout,
     compute: {
       module: device.createShaderModule({
+        label: 'computePipeline Shader Module',
         code: updateVerletWGSL,
       }),
       entryPoint: 'main',
-    },
-  });
-
-  const computePipelineBinSum = device.createComputePipeline({
-    layout: computePipelineLayout,
-    compute: {
-      module: device.createShaderModule({
-        code: updateVerletWGSL,
-      }),
-      entryPoint: 'binSum',
-    },
-  });
-
-  const computePipelineBinPrefixSum = device.createComputePipeline({
-    layout: computePipelineLayout,
-    compute: {
-      module: device.createShaderModule({
-        code: updateVerletWGSL,
-      }),
-      entryPoint: 'binPrefixSum',
-    },
-  });
-
-  const computePipelineBinReindex = device.createComputePipeline({
-    layout: computePipelineLayout,
-    compute: {
-      module: device.createShaderModule({
-        code: updateVerletWGSL,
-      }),
-      entryPoint: 'binReindex',
     },
   });
 
@@ -224,6 +207,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   });
 
   const texture = device.createTexture({
+    label: 'render attachment',
     size: [canvas.width, canvas.height],
     sampleCount,
     format: presentationFormat,
@@ -231,6 +215,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   });
 
   const depthTexture = device.createTexture({
+    label: 'depth texture',
     size: [canvas.width, canvas.height],
     sampleCount,
     format: 'depth24plus',
@@ -312,11 +297,13 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   // buffer setup
   const mvpMatBufferSize = Float32Array.BYTES_PER_ELEMENT * 16;
   const mvpMatBuffer = device.createBuffer({
+    label: 'mvp buffer',
     size: mvpMatBufferSize,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
   const mvpBindGroup = device.createBindGroup({
+    label: 'mvp bind group',
     layout: renderPipeline.getBindGroupLayout(0),
     entries: [{ binding: 0, resource: { buffer: mvpMatBuffer },}],
   });
@@ -326,6 +313,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   const simParams = new Float32Array(simParamsArrayLength);
   const simParamsBufferSize = simParamsArrayLength * Float32Array.BYTES_PER_ELEMENT;
   const simParamsBuffer = device.createBuffer({
+    label: 'sim params buffer',
     size: simParamsBufferSize,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
@@ -351,6 +339,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   const voBuffers: GPUBuffer[] = new Array(2);
   for (let i = 0; i < 2; ++i) {
     voBuffers[i] = device.createBuffer({
+      label: `Vertex Object Buffer ${i}`,
       size: voBufferSize,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
       mappedAtCreation: true,
@@ -361,6 +350,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
 
   const binParamsBufferSize = binParamsArrayLength * Uint32Array.BYTES_PER_ELEMENT;
   const binParamsBuffer = device.createBuffer({
+    label: 'bin params buffer',
     size: binParamsBufferSize,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
@@ -368,35 +358,72 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   device.queue.writeBuffer(binParamsBuffer, 0, binParams);
 
   const binBufferSize = Int32Array.BYTES_PER_ELEMENT * numVerletObjects;
-  const binBufferOffset = 0;
-  
-  const binSumBufferSize = Uint32Array.BYTES_PER_ELEMENT * binGridSquareCount;
-  const binSumBufferOffset = binBufferOffset + binBufferSize;
-  
-  const binPrefixSumBufferSize = Int32Array.BYTES_PER_ELEMENT * binGridSquareCount;
-  const binPrefixSumBufferOffset = binSumBufferOffset + binSumBufferSize;
-  
-  const binIndexTrackerBufferSize = Int32Array.BYTES_PER_ELEMENT * binGridSquareCount;
-  const binIndexTrackerBufferOffset = binPrefixSumBufferOffset + binPrefixSumBufferSize;
-  
-  const binReindexBufferSize = Uint32Array.BYTES_PER_ELEMENT * numVerletObjects;
-  const binReindexBufferOffset = binIndexTrackerBufferOffset + binIndexTrackerBufferSize;
-  
-  const binInfoBufferSize = binReindexBufferOffset + binReindexBufferSize;
-  const binInfoBuffers: GPUBuffer[] = new Array(2);
-  for (let i = 0; i < 2; ++i) {
-    binInfoBuffers[i] = device.createBuffer({
-      size: binInfoBufferSize,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-    });
-  }
+  const binBuffer = device.createBuffer({
+    label: 'bin buffer',
+    size: binBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
 
   const binReadBuffer: GPUBuffer = device.createBuffer({
+    label: 'bin read buffer',
     size: binBufferSize,
     usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
   })
 
+  const binSumBufferSize = Uint32Array.BYTES_PER_ELEMENT * binGridSquareCount;
+  const binSumBuffer = device.createBuffer({
+    label: 'binSum buffer',
+    size: binSumBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
+
+  const binSumReadBuffer: GPUBuffer = device.createBuffer({
+    label: 'binSum read buffer',
+    size: binSumBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binPrefixSumBufferSize = Int32Array.BYTES_PER_ELEMENT * binGridSquareCount;
+  const binPrefixSumBuffer = device.createBuffer({
+    label: 'binPrefixSum buffer',
+    size: binPrefixSumBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
+
+  const binPrefixSumReadBuffer: GPUBuffer = device.createBuffer({
+    label: 'binPrefixSum read buffer',
+    size: binPrefixSumBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binIndexTrackerBufferSize = Int32Array.BYTES_PER_ELEMENT * binGridSquareCount;
+  const binIndexTrackerBuffer = device.createBuffer({
+    label: 'binIndexTracker buffer',
+    size: binIndexTrackerBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
+
+  const binIndexTrackerReadBuffer: GPUBuffer = device.createBuffer({
+    label: 'binIndexTracker read buffer',
+    size: binIndexTrackerBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
+  const binReindexBufferSize = Uint32Array.BYTES_PER_ELEMENT * numVerletObjects;
+  const binReindexBuffer = device.createBuffer({
+    label: 'binReindex buffer',
+    size: binReindexBufferSize,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
+
+  const binReindexReadBuffer: GPUBuffer = device.createBuffer({
+    label: 'binReindex read buffer',
+    size: binReindexBufferSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+  })
+
   const computeParameterBindGroup = device.createBindGroup({
+    label: 'computeParameterBindGroup',
     layout: computePipelineMain.getBindGroupLayout(0),
     entries: [{
         binding: 0,
@@ -415,6 +442,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
   const computeBindGroups: GPUBindGroup[] = new Array(2);
   for (let i = 0; i < 2; ++i) {
     computeBindGroups[i] = device.createBindGroup({
+      label: `computeBindGroups ${i}`,
       layout: computePipelineMain.getBindGroupLayout(1),
       entries: [{
           binding: 0,
@@ -433,16 +461,37 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
         }, {
           binding: 2,
           resource: {
-            buffer: binInfoBuffers[i],
+            buffer: binBuffer,
             offset: 0,
-            size: binInfoBufferSize,
+            size: binBufferSize,
           },
         }, {
           binding: 3,
           resource: {
-            buffer: binInfoBuffers[(i + 1) % 2],
+            buffer: binSumBuffer,
             offset: 0,
-            size: binInfoBufferSize,
+            size: binSumBufferSize,
+          },
+        }, {
+          binding: 4,
+          resource: {
+            buffer: binPrefixSumBuffer,
+            offset: 0,
+            size: binPrefixSumBufferSize,
+          },
+        }, {
+          binding: 5,
+          resource: {
+            buffer: binIndexTrackerBuffer,
+            offset: 0,
+            size: binIndexTrackerBufferSize,
+          },
+        }, {
+          binding: 6,
+          resource: {
+            buffer: binReindexBuffer,
+            offset: 0,
+            size: binReindexBufferSize,
           },
         },
       ],
@@ -519,89 +568,39 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       },
     };
     
-    const commandEncoder = device.createCommandEncoder();
     
-    const timesteps = 4;
-    const subDeltaTime = deltaTime / timesteps;
-    for (let step = 0; step <= timesteps; ++step) {
-      const subTotalTime = totalTime - (subDeltaTime * (timesteps - (step + 1)));
-      updateSimParams(subTotalTime, subDeltaTime, clickPointX, clickPointY);
 
-      const workgroupCount = Math.ceil(numVerletObjects / 64);
+    updateSimParams(totalTime, deltaTime, clickPointX, clickPointY);
 
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setBindGroup(0, computeParameterBindGroup);
-        passEncoder.setBindGroup(1, computeBindGroups[(t + step) % 2]);
-        
-        passEncoder.setPipeline(computePipelineBinSum);
-        passEncoder.dispatchWorkgroups(workgroupCount);
-        passEncoder.end();
-      }
-
-      commandEncoder.copyBufferToBuffer(
-        binInfoBuffers[(t + step + 1) % 2],
-        binSumBufferOffset,
-        binInfoBuffers[(t + step) % 2],
-        binSumBufferOffset,
-        binSumBufferSize
-      );
-
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setBindGroup(0, computeParameterBindGroup);
-        passEncoder.setBindGroup(1, computeBindGroups[(t + step) % 2]);
-        
-        passEncoder.setPipeline(computePipelineBinPrefixSum);
-        passEncoder.dispatchWorkgroups(workgroupCount);
-        passEncoder.end();
-      }
-
-      commandEncoder.copyBufferToBuffer(
-        binInfoBuffers[(t + step + 1) % 2],
-        binPrefixSumBufferOffset,
-        binInfoBuffers[(t + step) % 2],
-        binPrefixSumBufferOffset,
-        binPrefixSumBufferSize
-      );
-
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setBindGroup(0, computeParameterBindGroup);
-        passEncoder.setBindGroup(1, computeBindGroups[(t + step) % 2]);
-        
-        passEncoder.setPipeline(computePipelineBinReindex);
-        passEncoder.dispatchWorkgroups(workgroupCount);;
-        passEncoder.end();
-      }
-
-      commandEncoder.copyBufferToBuffer(
-        binInfoBuffers[(t + step + 1) % 2],
-        binIndexTrackerBufferOffset,
-        binInfoBuffers[(t + step) % 2],
-        binIndexTrackerBufferOffset,
-        binIndexTrackerBufferSize
-      );
-
-      commandEncoder.copyBufferToBuffer(
-        binInfoBuffers[(t + step + 1) % 2],
-        binReindexBufferOffset,
-        binInfoBuffers[(t + step) % 2],
-        binReindexBufferOffset,
-        binReindexBufferSize
-      );
-
-      {
-        const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
-        passEncoder.setBindGroup(0, computeParameterBindGroup);
-        passEncoder.setBindGroup(1, computeBindGroups[(t + step) % 2]);
-        
-        passEncoder.setPipeline(computePipelineMain);
-        passEncoder.dispatchWorkgroups(workgroupCount);
-        passEncoder.end();
-      }
-    }
+    const workgroupCount = Math.ceil(numVerletObjects / 64);
     {
+      const commandEncoder = device.createCommandEncoder({label: 'compute encoder'});
+      const passEncoder = commandEncoder.beginComputePass(computePassDescriptor);
+      passEncoder.setBindGroup(0, computeParameterBindGroup);
+      passEncoder.setBindGroup(1, computeBindGroups[t % 2]);
+      
+      passEncoder.setPipeline(computePipelineMain);
+      passEncoder.dispatchWorkgroups(workgroupCount);
+      passEncoder.end();
+      device.queue.submit([commandEncoder.finish()]);
+    }
+
+    { //1
+      const commandEncoder = device.createCommandEncoder({label: 'copy encoder'});
+      commandEncoder.copyBufferToBuffer(binBuffer, 0, binReadBuffer, 0, binBufferSize);
+
+      await binReadBuffer.mapAsync(GPUMapMode.READ, 0, binBufferSize);
+      const copyArrayBuffer = binReadBuffer.getMappedRange();
+      const data = copyArrayBuffer.slice(0);
+
+      binReadBuffer.unmap();
+
+      // console.log(new Int32Array(data));
+      device.queue.submit([commandEncoder.finish()]);
+    }
+
+    {
+      const commandEncoder = device.createCommandEncoder({label: 'render encoder'});
       const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
       passEncoder.setPipeline(renderPipeline);
       passEncoder.setBindGroup(0, mvpBindGroup);
@@ -609,22 +608,9 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
       passEncoder.setVertexBuffer(1, voBuffers[(t + 1) % 2]);
       passEncoder.draw(quad.vertexCount, numVerletObjects, 0, 0);
       passEncoder.end();
+      device.queue.submit([commandEncoder.finish()]);
     }
 
-    device.queue.submit([commandEncoder.finish()]);
-
-    { //1
-      const commandEncoder2 = device.createCommandEncoder();
-      commandEncoder2.copyBufferToBuffer(binInfoBuffers[(t) % 2], 0, binReadBuffer, 0, binBufferSize);
-
-      await binReadBuffer.mapAsync(GPUMapMode.READ, 0, binBufferSize);
-      const copyArrayBuffer = binReadBuffer.getMappedRange(0, binBufferSize);
-      const data = copyArrayBuffer.slice(0);
-      binReadBuffer.unmap();
-      console.log(new Int32Array(data));
-
-      device.queue.submit([commandEncoder2.finish()]);
-    }
 
 
     stats.end()
@@ -633,6 +619,7 @@ const init: SampleInit = async ({ canvas, pageState, gui, stats }) => {
     lastFrameMS = now;
     requestAnimationFrame(frame);
   }
+
 
   requestAnimationFrame(frame);
 };
